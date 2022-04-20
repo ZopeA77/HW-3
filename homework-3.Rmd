@@ -1,0 +1,308 @@
+---
+title: "Homework 3"
+author: "PSTAT 131/231"
+output:
+    html_document:
+      toc: true
+      toc_float: true
+      code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE,
+                      warning = FALSE)
+```
+
+## Classification
+
+For this assignment, we will be working with part of a [Kaggle data set](https://www.kaggle.com/c/titanic/overview) that was the subject of a machine learning competition and is often used for practicing ML models. The goal is classification; specifically, to predict which passengers would survive the [Titanic shipwreck](https://en.wikipedia.org/wiki/Titanic).
+
+![Fig. 1: RMS Titanic departing Southampton on April 10, 1912.](images/RMS_Titanic.jpg){width="363"}
+
+Load the data from `data/titanic.csv` into *R* and familiarize yourself with the variables it contains using the codebook (`data/titanic_codebook.txt`).
+
+Notice that `survived` and `pclass` should be changed to factors. When changing `survived` to a factor, you may want to reorder the factor so that *"Yes"* is the first level.
+
+Make sure you load the `tidyverse` and `tidymodels`!
+
+*Remember that you'll need to set a seed at the beginning of the document to reproduce your results.*
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(tidymodels)
+library(corrplot)
+library(ggthemes)
+library(corrr)
+library(discrim)
+#install.packages("pROC")
+library(pROC)
+library(klaR)
+tidymodels_prefer()
+Titanic_data=read.csv("titanic.csv")
+Titanic_data$survived <- factor(Titanic_data$survived)
+Titanic_data$pclass <- factor(Titanic_data$pclass)
+Titanic_data %>%
+  head()
+```
+
+### Question 1
+
+Split the data, stratifying on the outcome variable, `survived.`  You should choose the proportions to split the data into. Verify that the training and testing data sets have the appropriate number of observations. Take a look at the training data and note any potential issues, such as missing data.
+
+```{r}
+set.seed(3435)
+
+titanic_split <- initial_split(Titanic_data, prop = 0.70,
+                                strata = survived)
+titanic_train <- training(titanic_split)
+titanic_test <- testing(titanic_split)
+
+titanic_train %>%
+  head()
+```
+The primary issue I see is that we have a lot of missing data with the variable "cabin". We also see a bit of missing data with the variable "age". 
+
+Why is it a good idea to use stratified sampling for this data?
+
+Stratified sampling allows us to properly represent each subgroup within our sample. By using stratified sampling, we can accurately represent the features of those who survived and those who died  appropriately.
+
+### Question 2
+
+Using the **training** data set, explore/describe the distribution of the outcome variable `survived`.
+
+```{r}
+ titanic_train %>% 
+  ggplot(aes(x = survived)) +
+  geom_bar() + xlab("Did the individual survive?")
+```
+
+The chart above indicates the distribution of our outcome variable "survived". Here, we see that our training data includes significantly more people who did not survive than who did. This makes sense as most people on the Titanic did not end up surviving.
+
+### Question 3
+
+Using the **training** data set, create a correlation matrix of all continuous variables. Create a visualization of the matrix, and describe any patterns you see. Are any predictors correlated with each other? Which ones, and in which direction?
+
+```{r}
+cor_Titanic <- titanic_train %>%
+  select(-survived) %>%
+  select(-pclass) %>%
+  select(-name) %>%
+  select(-sex) %>%
+  select(-ticket) %>%
+  select(-cabin) %>%
+  select(-embarked) %>% 
+  correlate()
+rplot(cor_Titanic)
+
+cor_Titanic %>%
+  stretch() %>%
+  ggplot(aes(x, y, fill = r)) +
+  geom_tile() +
+  geom_text(aes(label = as.character(fashion(r))))
+```
+In order to create a correlation matrix, we had to drop a number of predictors from our dataset. However, the correlation matrix above indicates that we do see a moderate positive correlation (.43) between the variables of sib_sp and parch. We also see a light positive correlation (.25) with variables fare and parch and a light negative correlation (-.33) with variables age and sib_sp.
+
+### Question 4
+
+Using the **training** data, create a recipe predicting the outcome variable `survived`. Include the following predictors: ticket class, sex, age, number of siblings or spouses aboard, number of parents or children aboard, and passenger fare.
+
+Recall that there were missing values for `age`. To deal with this, add an imputation step using `step_impute_linear()`. Next, use `step_dummy()` to **dummy** encode categorical predictors. Finally, include interactions between:
+
+-   Sex and passenger fare, and
+-   Age and passenger fare.
+
+You'll need to investigate the `tidymodels` documentation to find the appropriate step functions to use.
+
+```{r}
+titanic_recipe <- recipe(survived ~ pclass + sex + age + sib_sp + parch
+                            + fare, data = titanic_train) %>%
+  step_dummy(all_nominal_predictors()) %>%
+  step_impute_linear(age, impute_with = imp_vars(all_predictors())) %>%
+  step_interact(terms = ~ sex:fare) %>%
+  step_interact(terms = ~ age:fare) 
+  
+```
+
+### Question 5
+
+Specify a **logistic regression** model for classification using the `"glm"` engine. Then create a workflow. Add your model and the appropriate recipe. Finally, use `fit()` to apply your workflow to the **training** data.
+
+```{r}
+log_reg <- logistic_reg() %>% 
+  set_engine("glm") %>% 
+  set_mode("classification")
+
+```
+
+```{r}
+log_wkflow <- workflow() %>% 
+  add_model(log_reg) %>% 
+  add_recipe(titanic_recipe)
+
+log_fit <- fit(log_wkflow, titanic_train)
+  
+``` 
+
+***Hint: Make sure to store the results of `fit()`. You'll need them later on.***
+
+
+**Repeat Question 5**, but this time specify a linear discriminant analysis model for classification using the `"MASS"` engine.
+
+### Question 6
+
+```{r}
+lda_mod <- discrim_linear() %>% 
+  set_mode("classification") %>% 
+  set_engine("MASS")
+
+```
+
+```{r}
+lda_wkflow <- workflow() %>% 
+  add_model(lda_mod) %>% 
+  add_recipe(titanic_recipe)
+
+lda_fit <- fit(lda_wkflow, titanic_train)
+  
+``` 
+
+
+**Repeat Question 5**, but this time specify a quadratic discriminant analysis model for classification using the `"MASS"` engine.
+
+### Question 7
+
+```{r}
+qda_mod <- discrim_quad() %>% 
+  set_mode("classification") %>% 
+  set_engine("MASS")
+
+qda_wkflow <- workflow() %>% 
+  add_model(qda_mod) %>% 
+  add_recipe(titanic_recipe)
+
+qda_fit <- fit(qda_wkflow, titanic_train)
+```
+
+
+### Question 8
+
+**Repeat Question 5**, but this time specify a naive Bayes model for classification using the `"klaR"` engine. Set the `usekernel` argument to `FALSE`.
+
+```{r}
+nb_mod <- naive_Bayes() %>% 
+  set_mode("classification") %>% 
+  set_engine("klaR") %>% 
+  set_args(usekernel = FALSE) 
+
+nb_wkflow <- workflow() %>% 
+  add_model(nb_mod) %>% 
+  add_recipe(titanic_recipe)
+
+nb_fit <- fit(nb_wkflow, titanic_train)
+```
+
+### Question 9
+
+Now you've fit four different models to your training data.
+
+Use `predict()` and `bind_cols()` to generate predictions using each of these 4 models and your **training** data. Then use the *accuracy* metric to assess the performance of each of the four models.
+
+Which model achieved the highest accuracy on the training data?
+
+```{r}
+a <- predict(log_fit, new_data = titanic_train, type = "prob")
+b <- predict(lda_fit, new_data = titanic_train, type = "prob")
+c <- predict(qda_fit, new_data = titanic_train, type = "prob")
+d <- predict(nb_fit, new_data = titanic_train, type = "prob")
+new_column <- bind_cols(a,b,c,d)
+new_column
+```
+
+
+```{r}
+
+log_reg_acc <- augment(log_fit, new_data = titanic_train) %>%
+  accuracy(truth = survived, estimate = .pred_class)
+
+lda_reg_acc <- augment(lda_fit, new_data = titanic_train) %>%
+  accuracy(truth = survived, estimate = .pred_class)
+
+qda_reg_acc <- augment(qda_fit, new_data = titanic_train) %>%
+  accuracy(truth = survived, estimate = .pred_class)
+
+nb_reg_acc <- augment(nb_fit, new_data = titanic_train) %>%
+      accuracy(truth = survived, estimate = .pred_class)
+
+accuracies <- c(log_reg_acc$.estimate, lda_reg_acc$.estimate, 
+                nb_reg_acc$.estimate, qda_reg_acc$.estimate)
+models <- c("Logistic Regression", "LDA", "Naive Bayes", "QDA")
+results <- tibble(accuracies = accuracies, models = models)
+results %>% 
+arrange(-accuracies)
+
+```
+The first model we fit (the logistic regression) has the highest accuracy. 
+
+### Question 10
+
+Fit the model with the highest training accuracy to the **testing** data. Report the accuracy of the model on the **testing** data.
+
+Again using the **testing** data, create a confusion matrix and visualize it. Plot an ROC curve and calculate the area under it (AUC).
+
+
+How did the model perform? Compare its training and testing accuracies. If the values differ, why do you think this is so?
+
+```{r}
+new_log_reg <- logistic_reg() %>% 
+  set_engine("glm") %>% 
+  set_mode("classification")
+
+new_log_wkflow <- workflow() %>% 
+  add_model(new_log_reg) %>% 
+  add_recipe(titanic_recipe)
+
+new_log_fit <- fit(new_log_wkflow, titanic_test)
+
+new_log_reg_acc <- augment(new_log_fit, new_data = titanic_test) %>%
+  accuracy(truth = survived, estimate = .pred_class)
+
+new_log_reg_acc
+
+augment(new_log_fit, new_data = titanic_test) %>%
+  conf_mat(truth = survived, estimate = .pred_class) %>%
+  autoplot(type = "heatmap")
+
+
+ augment(new_log_fit, new_data = titanic_test) %>%
+  roc_curve(survived, .pred_No) %>%
+  autoplot()
+
+auc(titanic_test$survived, titanic_test$fare)
+```
+
+Overall, the logistic regression model that was fit to the testing data had an 82.4% accuracy rate. This is very similar to the previous model as the logistic regression model that was fit to the training data had an 81.4% accuracy rate. I believe it is also fair to say that the model did not perform well as it will incorrectly predict the survival status of approximately 20% of all observations. 
+
+### Required for 231 Students
+
+In a binary classification problem, let $p$ represent the probability of class label $1$, which implies that $1 - p$ represents the probability of class label $0$. The *logistic function* (also called the "inverse logit") is the cumulative distribution function of the logistic distribution, which maps a real number *z* to the open interval $(0, 1)$.
+
+### Question 11
+
+Given that:
+
+$$
+p(z)=\frac{e^z}{1+e^z}
+$$
+
+Prove that the inverse of a logistic function is indeed the *logit* function:
+
+$$
+z(p)=ln\left(\frac{p}{1-p}\right)
+$$
+
+### Question 12
+
+Assume that $z = \beta_0 + \beta_{1}x_{1}$ and $p = logistic(z)$. How do the odds of the outcome change if you increase $x_{1}$ by two? Demonstrate this.
+
+Assume now that $\beta_1$ is negative. What value does $p$ approach as $x_{1}$ approaches $\infty$? What value does $p$ approach as $x_{1}$ approaches $-\infty$?
